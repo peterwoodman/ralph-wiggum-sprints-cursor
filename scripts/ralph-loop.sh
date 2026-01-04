@@ -120,13 +120,9 @@ main() {
   echo ""
   
   # Count criteria (supports both "- [ ]" and "1. [ ]" formats)
-  TOTAL_CRITERIA=$(grep -cE '\[ \]|\[x\]' "$TASK_FILE" 2>/dev/null || echo "0")
-  DONE_CRITERIA=$(grep -c '\[x\]' "$TASK_FILE" 2>/dev/null || echo "0")
-  # Ensure we have valid integers (strip whitespace, default to 0)
-  TOTAL_CRITERIA=$(echo "$TOTAL_CRITERIA" | tr -cd '0-9')
-  DONE_CRITERIA=$(echo "$DONE_CRITERIA" | tr -cd '0-9')
-  [[ -z "$TOTAL_CRITERIA" ]] && TOTAL_CRITERIA=0
-  [[ -z "$DONE_CRITERIA" ]] && DONE_CRITERIA=0
+  # Note: || must be OUTSIDE $() to avoid capturing both grep output and echo
+  TOTAL_CRITERIA=$(grep -cE '\[ \]|\[x\]' "$TASK_FILE" 2>/dev/null) || TOTAL_CRITERIA=0
+  DONE_CRITERIA=$(grep -c '\[x\]' "$TASK_FILE" 2>/dev/null) || DONE_CRITERIA=0
   REMAINING=$((TOTAL_CRITERIA - DONE_CRITERIA))
   
   echo "Progress: $DONE_CRITERIA / $TOTAL_CRITERIA criteria complete ($REMAINING remaining)"

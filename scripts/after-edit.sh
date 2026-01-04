@@ -54,7 +54,7 @@ if [[ "$FILE_PATH" == *".ralph/"* ]]; then
 EOF
 
   # Increment bypass counter
-  BYPASS_COUNT=$(grep -c "Attempted .ralph/ Edit" "$EXT_DIR/failures.md" 2>/dev/null || echo "0")
+  BYPASS_COUNT=$(grep -c "Attempted .ralph/ Edit" "$EXT_DIR/failures.md" 2>/dev/null) || BYPASS_COUNT=0
   
   # If multiple bypass attempts, add a guardrail
   if [[ "$BYPASS_COUNT" -ge 2 ]]; then
@@ -116,7 +116,7 @@ fi
 # CHECK FOR THRASHING PATTERNS
 # =============================================================================
 
-EDIT_COUNT=$(grep -c "| $FILENAME |" "$EXT_DIR/edits.log" 2>/dev/null || echo "0")
+EDIT_COUNT=$(grep -c "| $FILENAME |" "$EXT_DIR/edits.log" 2>/dev/null) || EDIT_COUNT=0
 
 if [[ "$EDIT_COUNT" -gt 5 ]]; then
   cat >> "$EXT_DIR/failures.md" <<EOF
@@ -129,7 +129,7 @@ if [[ "$EDIT_COUNT" -gt 5 ]]; then
 
 EOF
 
-  THRASH_COUNT=$(grep -c "Potential Thrashing" "$EXT_DIR/failures.md" 2>/dev/null || echo "0")
+  THRASH_COUNT=$(grep -c "Potential Thrashing" "$EXT_DIR/failures.md" 2>/dev/null) || THRASH_COUNT=0
   sedi "s/Repeated failures: [0-9]*/Repeated failures: $THRASH_COUNT/" "$EXT_DIR/failures.md"
   
   if [[ "$THRASH_COUNT" -gt 2 ]]; then

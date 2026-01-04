@@ -46,7 +46,7 @@ fi
 CURRENT_ITERATION=$(get_iteration "$EXT_DIR")
 TURN_COUNT=$(get_turn_count "$EXT_DIR")
 ESTIMATED_TOKENS=$((TURN_COUNT * TOKENS_PER_TURN))
-UNCHECKED_CRITERIA=$(grep -c '\- \[ \]' "$TASK_FILE" 2>/dev/null || echo "0")
+UNCHECKED_CRITERIA=$(grep -c '\[ \]' "$TASK_FILE" 2>/dev/null) || UNCHECKED_CRITERIA=0
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Get test command
