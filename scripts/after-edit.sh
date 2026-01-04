@@ -1,7 +1,9 @@
 #!/bin/bash
 # Ralph Wiggum: After File Edit Hook
-# Tracks edits to edits.log and context-log.md (hook-managed, append-only)
-# Does NOT touch progress.md (agent-managed)
+# - Appends to edits.log (raw history)
+# - Appends checkpoints to progress.md (recovery points)
+# - Updates context-log.md (malloc tracking)
+# - Detects thrashing patterns
 
 set -euo pipefail
 
@@ -17,7 +19,7 @@ sedi() {
 # Read hook input from stdin
 HOOK_INPUT=$(cat)
 
-# Extract file info - using correct Cursor field names
+# Extract file info
 FILE_PATH=$(echo "$HOOK_INPUT" | jq -r '.file_path // ""')
 WORKSPACE_ROOT=$(echo "$HOOK_INPUT" | jq -r '.workspace_roots[0] // "."')
 
@@ -27,6 +29,7 @@ NEW_TOTAL=$(echo "$HOOK_INPUT" | jq -r '[.edits[].new_string // ""] | map(length
 
 RALPH_DIR="$WORKSPACE_ROOT/.ralph"
 EDITS_LOG="$RALPH_DIR/edits.log"
+PROGRESS_FILE="$RALPH_DIR/progress.md"
 CONTEXT_LOG="$RALPH_DIR/context-log.md"
 FAILURES_FILE="$RALPH_DIR/failures.md"
 STATE_FILE="$RALPH_DIR/state.md"
@@ -40,7 +43,7 @@ fi
 # Get current iteration
 CURRENT_ITERATION=$(grep '^iteration:' "$STATE_FILE" 2>/dev/null | sed 's/iteration: *//' || echo "0")
 
-# Calculate change size
+# Calculate change
 CHANGE_SIZE=$((NEW_TOTAL - OLD_TOTAL))
 
 if [[ $CHANGE_SIZE -lt 0 ]]; then
@@ -53,51 +56,60 @@ elif [[ $CHANGE_SIZE -gt 0 ]]; then
   CHANGE_TYPE="added"
 else
   CHANGE_TYPE="no-op"
+  echo '{}'
+  exit 0
 fi
 
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+TIME_SHORT=$(date -u +%H:%M:%S)
 FILENAME=$(basename "$FILE_PATH")
 
 # =============================================================================
-# 1. APPEND TO EDITS.LOG (raw edit history, hook-managed)
+# 1. APPEND TO EDITS.LOG (raw edit history)
 # =============================================================================
 
-# Create edits.log if it doesn't exist
 if [[ ! -f "$EDITS_LOG" ]]; then
   cat > "$EDITS_LOG" <<EOF
 # Edit Log (Hook-Managed)
-# This file is append-only, managed by hooks. Do not edit manually.
+# This file is append-only. Do not edit manually.
 # Format: TIMESTAMP | FILE | CHANGE_TYPE | CHARS | ITERATION
 
 EOF
 fi
 
-# Append the edit record
 echo "$TIMESTAMP | $FILENAME | $CHANGE_TYPE | $CHANGE_SIZE chars | iter $CURRENT_ITERATION" >> "$EDITS_LOG"
 
 # =============================================================================
-# 2. UPDATE CONTEXT-LOG.MD (edits consume context too)
+# 2. APPEND CHECKPOINT TO PROGRESS.MD (incremental, for recovery)
+# =============================================================================
+
+# Skip logging edits to .ralph/ files to avoid noise
+if [[ "$FILE_PATH" != *".ralph/"* ]]; then
+  # Append a checkpoint entry
+  cat >> "$PROGRESS_FILE" <<EOF
+
+**[$TIME_SHORT]** Edited \`$FILENAME\` ($CHANGE_SIZE chars $CHANGE_TYPE)
+EOF
+fi
+
+# =============================================================================
+# 3. UPDATE CONTEXT-LOG.MD (edits consume context)
 # =============================================================================
 
 if [[ -f "$CONTEXT_LOG" ]]; then
-  # Estimate tokens consumed by this edit (diff goes into context)
-  # Rough estimate: old + new content, divided by 4
   EDIT_TOKENS=$(( (OLD_TOTAL + NEW_TOTAL) / 4 ))
   if [[ $EDIT_TOKENS -lt 10 ]]; then
-    EDIT_TOKENS=10  # Minimum overhead for any edit
+    EDIT_TOKENS=10
   fi
   
-  # Read current allocated tokens
   CURRENT_ALLOCATED=$(grep 'Allocated:' "$CONTEXT_LOG" | grep -o '[0-9]*' | head -1 || echo "0")
   if [[ -z "$CURRENT_ALLOCATED" ]]; then
     CURRENT_ALLOCATED=0
   fi
   NEW_ALLOCATED=$((CURRENT_ALLOCATED + EDIT_TOKENS))
   
-  # Update the allocated count
   sedi "s/Allocated: [0-9]* tokens/Allocated: $NEW_ALLOCATED tokens/" "$CONTEXT_LOG"
   
-  # Determine status
   THRESHOLD=80000
   WARN_THRESHOLD=$((THRESHOLD * 80 / 100))
   CRITICAL_THRESHOLD=$((THRESHOLD * 95 / 100))
@@ -108,7 +120,6 @@ if [[ -f "$CONTEXT_LOG" ]]; then
     sedi "s/Status: .*/Status: 🟡 Warning - Approaching limit/" "$CONTEXT_LOG"
   fi
   
-  # Log this edit to the context table
   TEMP_FILE=$(mktemp)
   awk -v file="[EDIT] $FILENAME" -v tokens="$EDIT_TOKENS" -v ts="$TIMESTAMP" '
     /^## Estimated Context Usage/ {
@@ -121,14 +132,12 @@ if [[ -f "$CONTEXT_LOG" ]]; then
 fi
 
 # =============================================================================
-# 3. CHECK FOR THRASHING PATTERNS
+# 4. CHECK FOR THRASHING PATTERNS
 # =============================================================================
 
-# Count edits to this file in this session
 EDIT_COUNT=$(grep -c "| $FILENAME |" "$EDITS_LOG" 2>/dev/null || echo "0")
 
 if [[ "$EDIT_COUNT" -gt 5 ]]; then
-  # Possible thrashing on this file
   cat >> "$FAILURES_FILE" <<EOF
 
 ## Potential Thrashing Detected
@@ -137,11 +146,8 @@ if [[ "$EDIT_COUNT" -gt 5 ]]; then
 - Iteration: $CURRENT_ITERATION
 - Time: $TIMESTAMP
 
-Consider: Is this file being repeatedly modified without progress?
-
 EOF
 
-  # Update pattern detection
   REPEATED_FAILURES=$(grep -c "Potential Thrashing" "$FAILURES_FILE" 2>/dev/null || echo "0")
   sedi "s/Repeated failures: [0-9]*/Repeated failures: $REPEATED_FAILURES/" "$FAILURES_FILE"
   

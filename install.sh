@@ -1,9 +1,6 @@
 #!/bin/bash
 # Ralph Wiggum: One-click installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/agrimsingh/ralph-wiggum-cursor/main/install.sh | bash
-#
-# This installs Ralph directly into your current project.
-# No external repo reference needed - everything lives in your project.
 
 set -euo pipefail
 
@@ -50,7 +47,6 @@ echo "✓ Scripts installed to .cursor/ralph-scripts/"
 # Download hooks.json and update paths
 echo "📥 Downloading hooks configuration..."
 curl -fsSL "$REPO_RAW/hooks.json" -o ".cursor/hooks.json"
-# Update paths to point to local scripts
 if [[ "$OSTYPE" == "darwin"* ]]; then
   sed -i '' 's|./scripts/|./.cursor/ralph-scripts/|g' .cursor/hooks.json
 else
@@ -95,7 +91,6 @@ echo ""
 
 CLOUD_ENABLED=false
 
-# Check for existing API key
 if [[ -n "${CURSOR_API_KEY:-}" ]]; then
   echo "✓ Found CURSOR_API_KEY in environment - Cloud Mode enabled"
   CLOUD_ENABLED=true
@@ -111,7 +106,6 @@ if [[ "$CLOUD_ENABLED" == "false" ]] && [[ -t 0 ]]; then
   echo "To enable Cloud Mode, you can:"
   echo "  1. Set environment variable: export CURSOR_API_KEY='your-key'"
   echo "  2. Create ~/.cursor/ralph-config.json with your key"
-  echo "  3. Create .cursor/ralph-config.json in this project"
   echo ""
   echo "Get your API key from: https://cursor.com/dashboard?tab=integrations"
   echo ""
@@ -125,40 +119,26 @@ fi
 echo ""
 echo "📁 Initializing .ralph/ state directory..."
 
-# -----------------------------------------------------------------------------
-# HOOK-MANAGED FILES (append-only, machine-written)
-# -----------------------------------------------------------------------------
+INIT_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-cat > .ralph/state.md <<'EOF'
+# state.md
+cat > .ralph/state.md <<EOF
 ---
 iteration: 0
 status: initialized
-started_at: {{TIMESTAMP}}
+started_at: $INIT_TIMESTAMP
 ---
 
 # Ralph State
 
-Ready to begin. Start a conversation and mention the Ralph task.
+Iteration 0 - Initialized, waiting for first prompt.
 EOF
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  sed -i '' "s/{{TIMESTAMP}}/$(date -u +%Y-%m-%dT%H:%M:%SZ)/" .ralph/state.md
-else
-  sed -i "s/{{TIMESTAMP}}/$(date -u +%Y-%m-%dT%H:%M:%SZ)/" .ralph/state.md
-fi
 
-cat > .ralph/context-log.md <<'EOF'
+# context-log.md
+cat > .ralph/context-log.md <<EOF
 # Context Allocation Log (Hook-Managed)
 
 > ⚠️ This file is managed by hooks. Do not edit manually.
-
-Tracking what's been loaded into context to prevent redlining.
-
-## The malloc/free Metaphor
-
-- Reading files = malloc() into context
-- Editing files = malloc() (diffs go into context)
-- There is NO free() - context cannot be selectively cleared
-- Only way to free: start a new conversation
 
 ## Current Session
 
@@ -173,39 +153,31 @@ Tracking what's been loaded into context to prevent redlining.
 
 EOF
 
-cat > .ralph/edits.log <<'EOF'
+# edits.log
+cat > .ralph/edits.log <<EOF
 # Edit Log (Hook-Managed)
-# This file is append-only, managed by hooks. Do not edit manually.
+# This file is append-only. Do not edit manually.
 # Format: TIMESTAMP | FILE | CHANGE_TYPE | CHARS | ITERATION
 
 EOF
 
-cat > .ralph/failures.md <<'EOF'
+# failures.md
+cat > .ralph/failures.md <<EOF
 # Failure Log (Hook-Managed)
-
-> ⚠️ This file is managed by hooks. Do not edit manually.
-
-Tracking failure patterns to detect "gutter" situations.
-
-## What is the Gutter?
-
-> "If the bowling ball is in the gutter, there's no saving it."
-
-When the agent is stuck in a failure loop, it's "in the gutter."
-The solution is fresh context, not more attempts in polluted context.
-
-## Recent Failures
-
-(Failures will be logged here by hooks)
 
 ## Pattern Detection
 
 - Repeated failures: 0
 - Gutter risk: Low
 
+## Recent Failures
+
+(Failures will be logged here by hooks)
+
 EOF
 
-cat > .ralph/guardrails.md <<'EOF'
+# guardrails.md
+cat > .ralph/guardrails.md <<EOF
 # Ralph Guardrails (Signs)
 
 These are lessons learned from iterations. Follow these to avoid known pitfalls.
@@ -214,19 +186,15 @@ These are lessons learned from iterations. Follow these to avoid known pitfalls.
 
 ### Sign: Read Before Writing
 - **Always** read existing files before modifying them
-- Check git history for context on why things are the way they are
 
 ### Sign: Test After Changes
 - Run tests after every significant change
-- Don't assume code works - verify it
 
 ### Sign: Commit Checkpoints
 - Commit working states before attempting risky changes
-- Use descriptive commit messages
 
 ### Sign: One Thing at a Time
 - Focus on one criterion at a time
-- Don't try to do everything in one iteration
 
 ---
 
@@ -236,28 +204,16 @@ These are lessons learned from iterations. Follow these to avoid known pitfalls.
 
 EOF
 
-# -----------------------------------------------------------------------------
-# AGENT-MANAGED FILES (agent owns these, can rewrite)
-# -----------------------------------------------------------------------------
+# progress.md - incremental, hooks append checkpoints
+cat > .ralph/progress.md <<EOF
+# Progress Log
 
-cat > .ralph/progress.md <<'EOF'
-# Progress Log (Agent-Managed)
+> This file tracks incremental progress. Hooks append checkpoints automatically.
+> You can also add your own notes and summaries here.
 
-> This file is YOUR workspace. Update it as you work.
-> You can rewrite, reorganize, or restructure this file as needed.
-> Raw edit history is preserved in `edits.log` by hooks.
+---
 
-## Current Status
-
-Not started.
-
-## Completed Items
-
-(Update this as you complete items from RALPH_TASK.md)
-
-## Notes
-
-(Add any notes, observations, or context here)
+## Iteration History
 
 EOF
 
@@ -273,11 +229,11 @@ if [[ ! -f "RALPH_TASK.md" ]]; then
 ---
 task: Build a CLI todo app in TypeScript
 completion_criteria:
-  - Can add todos with: npx ts-node todo.ts add "task"
-  - Can list todos with: npx ts-node todo.ts list  
-  - Can complete todos with: npx ts-node todo.ts done <id>
-  - Todos persist to todos.json
-  - Has helpful error messages
+  - Can add todos
+  - Can list todos
+  - Can complete todos
+  - Todos persist to JSON
+  - Has error handling
 max_iterations: 20
 ---
 
@@ -290,12 +246,9 @@ Build a simple command-line todo application in TypeScript.
 1. Single file: `todo.ts`
 2. Uses `todos.json` for persistence
 3. Three commands: add, list, done
-4. Shows todo ID and completion status when listing
-5. TypeScript with proper types
+4. TypeScript with proper types
 
 ## Success Criteria
-
-The task is complete when ALL of the following are true:
 
 1. [ ] `npx ts-node todo.ts add "Buy milk"` adds a todo and confirms
 2. [ ] `npx ts-node todo.ts list` shows all todos with IDs and status
@@ -310,35 +263,24 @@ The task is complete when ALL of the following are true:
 $ npx ts-node todo.ts add "Buy milk"
 ✓ Added: "Buy milk" (id: 1)
 
-$ npx ts-node todo.ts add "Walk dog"
-✓ Added: "Walk dog" (id: 2)
-
 $ npx ts-node todo.ts list
 1. [ ] Buy milk
-2. [ ] Walk dog
 
 $ npx ts-node todo.ts done 1
 ✓ Completed: "Buy milk"
-
-$ npx ts-node todo.ts list
-1. [x] Buy milk
-2. [ ] Walk dog
 ```
 
 ---
 
 ## Ralph Instructions
 
-When working on this task:
-
 1. Read `.ralph/progress.md` to see what's been done
 2. Check `.ralph/guardrails.md` for signs to follow
 3. Work on the next incomplete criterion (marked [ ])
-4. Update `.ralph/progress.md` with your progress
-5. Check off completed criteria in this file (change [ ] to [x])
-6. Commit your changes with descriptive messages
-7. When ALL criteria are [x], say: `RALPH_COMPLETE: All criteria satisfied`
-8. If stuck on the same issue 3+ times, say: `RALPH_GUTTER: Need fresh context`
+4. Check off completed criteria (change [ ] to [x])
+5. Commit your changes with descriptive messages
+6. When ALL criteria are [x], say: `RALPH_COMPLETE: All criteria satisfied`
+7. If stuck on the same issue 3+ times, say: `RALPH_GUTTER: Need fresh context`
 EOF
   echo "✓ Created RALPH_TASK.md with TypeScript example task"
 else
@@ -349,26 +291,19 @@ fi
 # UPDATE .gitignore
 # =============================================================================
 
-GITIGNORE_ADDITIONS=""
-
-# Check what needs to be added
 if [[ -f ".gitignore" ]]; then
   if ! grep -q "ralph-config.json" .gitignore 2>/dev/null; then
-    GITIGNORE_ADDITIONS="$GITIGNORE_ADDITIONS
-# Ralph config (may contain API key)
-.cursor/ralph-config.json"
+    echo "" >> .gitignore
+    echo "# Ralph config (may contain API key)" >> .gitignore
+    echo ".cursor/ralph-config.json" >> .gitignore
   fi
 else
-  GITIGNORE_ADDITIONS="# Ralph config (may contain API key)
-.cursor/ralph-config.json"
+  cat > .gitignore <<'EOF'
+# Ralph config (may contain API key)
+.cursor/ralph-config.json
+EOF
 fi
-
-if [[ -n "$GITIGNORE_ADDITIONS" ]]; then
-  echo "$GITIGNORE_ADDITIONS" >> .gitignore
-  echo "✓ Updated .gitignore"
-fi
-
-# Note: We do NOT gitignore .ralph/ - progress should be committed!
+echo "✓ Updated .gitignore"
 
 # =============================================================================
 # SUMMARY
@@ -387,12 +322,12 @@ echo "     ├── ralph-scripts/       - Hook scripts"
 echo "     └── SKILL.md             - Skill definition"
 echo ""
 echo "  📁 .ralph/"
-echo "     ├── state.md             - Current iteration (hook-managed)"
-echo "     ├── context-log.md       - Context tracking (hook-managed)"
-echo "     ├── edits.log            - Raw edit history (hook-managed)"
-echo "     ├── failures.md          - Failure patterns (hook-managed)"
-echo "     ├── guardrails.md        - Signs to follow (hook-managed)"
-echo "     └── progress.md          - Your progress (agent-managed)"
+echo "     ├── state.md             - Current iteration"
+echo "     ├── progress.md          - Incremental checkpoints"
+echo "     ├── context-log.md       - Context (malloc) tracking"
+echo "     ├── edits.log            - Raw edit history"
+echo "     ├── failures.md          - Failure patterns"
+echo "     └── guardrails.md        - Signs to follow"
 echo ""
 echo "  📄 RALPH_TASK.md            - Your task definition (edit this!)"
 echo ""
@@ -407,7 +342,7 @@ if [[ "$CLOUD_ENABLED" == "true" ]]; then
 else
   echo "Mode: 💻 Local (you'll be prompted to start new conversations)"
   echo ""
-  echo "To enable Cloud Mode (automatic fresh context):"
+  echo "To enable Cloud Mode:"
   echo "  export CURSOR_API_KEY='your-key-from-cursor-dashboard'"
 fi
 echo ""

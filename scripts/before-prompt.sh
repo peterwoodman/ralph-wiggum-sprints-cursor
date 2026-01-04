@@ -1,6 +1,8 @@
 #!/bin/bash
 # Ralph Wiggum: Before Prompt Hook
-# Injects guardrails and context awareness into prompts
+# - Updates iteration count in state.md
+# - Adds iteration marker to progress.md
+# - Injects guardrails into agent context
 
 set -euo pipefail
 
@@ -16,16 +18,13 @@ sedi() {
 # Read hook input from stdin
 HOOK_INPUT=$(cat)
 
-# Extract workspace root - try multiple possible field names
+# Extract workspace root
 WORKSPACE_ROOT=$(echo "$HOOK_INPUT" | jq -r '.workspace_roots[0] // .cwd // "."')
 
-# If workspace_roots is empty or ".", try to find it from the prompt
 if [[ "$WORKSPACE_ROOT" == "." ]] || [[ -z "$WORKSPACE_ROOT" ]]; then
-  # Check if we're in a directory with RALPH_TASK.md
   if [[ -f "./RALPH_TASK.md" ]]; then
     WORKSPACE_ROOT="."
   else
-    # Can't determine workspace, pass through
     echo '{"continue": true}'
     exit 0
   fi
@@ -36,7 +35,6 @@ TASK_FILE="$WORKSPACE_ROOT/RALPH_TASK.md"
 
 # Check if Ralph is active
 if [[ ! -f "$TASK_FILE" ]]; then
-  # No Ralph task - pass through
   echo '{"continue": true}'
   exit 0
 fi
@@ -45,20 +43,18 @@ fi
 if [[ ! -d "$RALPH_DIR" ]]; then
   mkdir -p "$RALPH_DIR"
   
-  # Initialize state file
   cat > "$RALPH_DIR/state.md" <<EOF
 ---
 iteration: 0
-status: initializing
+status: initialized
 started_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 ---
 
 # Ralph State
 
-Waiting for first iteration to begin.
+Iteration 0 - Initialized, waiting for first prompt.
 EOF
 
-  # Initialize guardrails file
   cat > "$RALPH_DIR/guardrails.md" <<EOF
 # Ralph Guardrails (Signs)
 
@@ -68,15 +64,15 @@ These are lessons learned from previous iterations. Follow these to avoid known 
 
 ### Sign: Read Before Writing
 - **Always** read existing files before modifying them
-- Check git history for context on why things are the way they are
 
 ### Sign: Test After Changes
 - Run tests after every significant change
-- Don't assume code works - verify it
 
 ### Sign: Commit Checkpoints
 - Commit working states before attempting risky changes
-- Use descriptive commit messages
+
+### Sign: One Thing at a Time
+- Focus on one criterion at a time
 
 ---
 
@@ -86,11 +82,10 @@ These are lessons learned from previous iterations. Follow these to avoid known 
 
 EOF
 
-  # Initialize context log
   cat > "$RALPH_DIR/context-log.md" <<EOF
-# Context Allocation Log
+# Context Allocation Log (Hook-Managed)
 
-Tracking what's been loaded into context to prevent redlining.
+> ⚠️ This file is managed by hooks. Do not edit manually.
 
 ## Current Session
 
@@ -105,58 +100,75 @@ Tracking what's been loaded into context to prevent redlining.
 
 EOF
 
-  # Initialize failures log
+  cat > "$RALPH_DIR/edits.log" <<EOF
+# Edit Log (Hook-Managed)
+# This file is append-only. Do not edit manually.
+# Format: TIMESTAMP | FILE | CHANGE_TYPE | CHARS | ITERATION
+
+EOF
+
   cat > "$RALPH_DIR/failures.md" <<EOF
-# Failure Log
-
-Tracking failure patterns to detect "gutter" situations.
-
-## Recent Failures
-
-(Failures will be logged here)
+# Failure Log (Hook-Managed)
 
 ## Pattern Detection
 
 - Repeated failures: 0
 - Gutter risk: Low
 
+## Recent Failures
+
+(Failures will be logged here by hooks)
+
 EOF
 
-  # Initialize progress log
   cat > "$RALPH_DIR/progress.md" <<EOF
 # Progress Log
 
-## Summary
+> This file tracks incremental progress. Hooks append checkpoints automatically.
+> You can also add your own notes and summaries.
 
-- Iterations completed: 0
-- Tasks completed: 0
-- Current status: Not started
+---
 
 ## Iteration History
-
-(Progress will be logged here)
 
 EOF
 fi
 
 # Read current state
 STATE_FILE="$RALPH_DIR/state.md"
+PROGRESS_FILE="$RALPH_DIR/progress.md"
 GUARDRAILS_FILE="$RALPH_DIR/guardrails.md"
 CONTEXT_LOG="$RALPH_DIR/context-log.md"
 
 # Extract current iteration
 CURRENT_ITERATION=$(grep '^iteration:' "$STATE_FILE" 2>/dev/null | sed 's/iteration: *//' || echo "0")
 NEXT_ITERATION=$((CURRENT_ITERATION + 1))
+TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-# Update iteration count and status
-sedi "s/^iteration: .*/iteration: $NEXT_ITERATION/" "$STATE_FILE"
-sedi "s/^status: .*/status: active/" "$STATE_FILE"
+# Update state.md - rewrite the whole file to avoid sed issues
+cat > "$STATE_FILE" <<EOF
+---
+iteration: $NEXT_ITERATION
+status: active
+started_at: $TIMESTAMP
+---
 
-# Also update the text description in state.md
-sedi "s/Waiting for first iteration to begin./Iteration $NEXT_ITERATION in progress./" "$STATE_FILE"
-sedi "s/Iteration [0-9]* in progress./Iteration $NEXT_ITERATION in progress./" "$STATE_FILE"
+# Ralph State
 
-# Check context health (cross-platform)
+Iteration $NEXT_ITERATION - Active
+EOF
+
+# Add iteration marker to progress.md
+cat >> "$PROGRESS_FILE" <<EOF
+
+---
+
+### 🔄 Iteration $NEXT_ITERATION Started
+**Time:** $TIMESTAMP
+
+EOF
+
+# Check context health
 ESTIMATED_TOKENS=$(grep 'Allocated:' "$CONTEXT_LOG" 2>/dev/null | grep -o '[0-9]*' | head -1 || echo "0")
 if [[ -z "$ESTIMATED_TOKENS" ]]; then
   ESTIMATED_TOKENS=0
@@ -169,14 +181,13 @@ if [[ "$ESTIMATED_TOKENS" -gt "$WARN_THRESHOLD" ]]; then
   CONTEXT_WARNING="⚠️ CONTEXT WARNING: Approaching limit ($ESTIMATED_TOKENS tokens). Consider starting fresh."
 fi
 
-# Read guardrails
+# Read learned guardrails
 GUARDRAILS=""
 if [[ -f "$GUARDRAILS_FILE" ]]; then
-  # Extract learned signs section
   GUARDRAILS=$(sed -n '/## Learned Signs/,$ p' "$GUARDRAILS_FILE" | tail -n +3)
 fi
 
-# Build agent message with Ralph context
+# Build agent message
 AGENT_MSG="🔄 **Ralph Iteration $NEXT_ITERATION**
 
 $CONTEXT_WARNING
@@ -185,25 +196,24 @@ $CONTEXT_WARNING
 Read RALPH_TASK.md for the full task description and completion criteria.
 
 ## Key Files
-- \`.ralph/progress.md\` - What's been accomplished
-- \`.ralph/guardrails.md\` - Signs to follow (lessons learned)
-- \`.ralph/state.md\` - Current iteration state
+- \`.ralph/progress.md\` - Incremental progress (hooks append checkpoints)
+- \`.ralph/guardrails.md\` - Signs to follow
+- \`.ralph/edits.log\` - Raw edit history
 
 ## Ralph Protocol
-1. Read progress.md to see what's done
+1. Read progress.md to see what's been done
 2. Check guardrails.md for signs to follow
-3. Work on the NEXT incomplete item from RALPH_TASK.md
-4. Update progress.md with what you accomplished
-5. Commit your changes with a descriptive message
-6. If ALL completion criteria are met, say: \"RALPH_COMPLETE: All criteria satisfied\"
+3. Work on the NEXT incomplete criterion from RALPH_TASK.md
+4. Update progress.md with notes as you work
+5. Commit your changes with descriptive messages
+6. When ALL criteria are met, say: \"RALPH_COMPLETE: All criteria satisfied\"
 7. If stuck on same issue 3+ times, say: \"RALPH_GUTTER: Need fresh context\"
 
 ## Current Guardrails
 $GUARDRAILS
 
-Remember: Progress is tracked in FILES, not in context. Always update progress.md."
+Remember: Progress is tracked in FILES, not in context. Hooks automatically log your edits."
 
-# Output JSON response
 jq -n \
   --arg msg "$AGENT_MSG" \
   '{
