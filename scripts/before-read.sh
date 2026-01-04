@@ -4,6 +4,15 @@
 
 set -euo pipefail
 
+# Cross-platform sed -i
+sedi() {
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i '' "$@"
+  else
+    sed -i "$@"
+  fi
+}
+
 # Read hook input from stdin
 HOOK_INPUT=$(cat)
 
@@ -30,15 +39,15 @@ TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Append to context log (in the table)
 if [[ -f "$CONTEXT_LOG" ]]; then
-  # Find the table and append
-  # This is a simplified approach - in production you'd want more robust parsing
-  
-  # Read current allocated tokens
-  CURRENT_ALLOCATED=$(grep 'Allocated:' "$CONTEXT_LOG" | grep -oP '\d+' || echo "0")
+  # Read current allocated tokens (cross-platform grep)
+  CURRENT_ALLOCATED=$(grep 'Allocated:' "$CONTEXT_LOG" | grep -o '[0-9]*' | head -1 || echo "0")
+  if [[ -z "$CURRENT_ALLOCATED" ]]; then
+    CURRENT_ALLOCATED=0
+  fi
   NEW_ALLOCATED=$((CURRENT_ALLOCATED + ESTIMATED_TOKENS))
   
   # Update the allocated count
-  sed -i "s/Allocated: [0-9]* tokens/Allocated: $NEW_ALLOCATED tokens/" "$CONTEXT_LOG"
+  sedi "s/Allocated: [0-9]* tokens/Allocated: $NEW_ALLOCATED tokens/" "$CONTEXT_LOG"
   
   # Determine status
   THRESHOLD=80000
@@ -47,14 +56,13 @@ if [[ -f "$CONTEXT_LOG" ]]; then
   
   if [[ "$NEW_ALLOCATED" -gt "$CRITICAL_THRESHOLD" ]]; then
     STATUS="🔴 Critical - Start fresh!"
-    sed -i "s/Status: .*/Status: $STATUS/" "$CONTEXT_LOG"
+    sedi "s/Status: .*/Status: $STATUS/" "$CONTEXT_LOG"
   elif [[ "$NEW_ALLOCATED" -gt "$WARN_THRESHOLD" ]]; then
     STATUS="🟡 Warning - Approaching limit"
-    sed -i "s/Status: .*/Status: $STATUS/" "$CONTEXT_LOG"
+    sedi "s/Status: .*/Status: $STATUS/" "$CONTEXT_LOG"
   fi
   
   # Log this file (append before the Estimated Context Usage section)
-  # Using a temp file approach for safety
   TEMP_FILE=$(mktemp)
   awk -v file="$FILE_PATH" -v tokens="$ESTIMATED_TOKENS" -v ts="$TIMESTAMP" '
     /^## Estimated Context Usage/ {
@@ -71,7 +79,10 @@ THRESHOLD=80000
 CRITICAL_THRESHOLD=$((THRESHOLD * 95 / 100))
 
 if [[ -f "$CONTEXT_LOG" ]]; then
-  CURRENT_ALLOCATED=$(grep 'Allocated:' "$CONTEXT_LOG" | grep -oP '\d+' || echo "0")
+  CURRENT_ALLOCATED=$(grep 'Allocated:' "$CONTEXT_LOG" | grep -o '[0-9]*' | head -1 || echo "0")
+  if [[ -z "$CURRENT_ALLOCATED" ]]; then
+    CURRENT_ALLOCATED=0
+  fi
   
   if [[ "$CURRENT_ALLOCATED" -gt "$CRITICAL_THRESHOLD" ]]; then
     # Context is critically full - warn but allow

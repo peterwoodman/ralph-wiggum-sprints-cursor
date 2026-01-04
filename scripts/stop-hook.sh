@@ -10,6 +10,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Cross-platform sed -i
+sedi() {
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i '' "$@"
+  else
+    sed -i "$@"
+  fi
+}
+
 # Read hook input from stdin
 HOOK_INPUT=$(cat)
 
@@ -87,7 +96,7 @@ MAX_ITERATIONS=$(grep '^max_iterations:' "$TASK_FILE" | sed 's/max_iterations: *
 if echo "$LAST_OUTPUT" | grep -q "RALPH_COMPLETE"; then
   echo "✅ Ralph: Task completed after $CURRENT_ITERATION iterations!"
   
-  sed -i "s/^status: .*/status: completed/" "$STATE_FILE"
+  sedi "s/^status: .*/status: completed/" "$STATE_FILE"
   
   cat >> "$PROGRESS_FILE" <<EOF
 
@@ -113,7 +122,7 @@ if echo "$LAST_OUTPUT" | grep -q "RALPH_GUTTER"; then
   echo ""
   echo "Recommended: Review the task and guardrails, then restart."
   
-  sed -i "s/^status: .*/status: gutter_detected/" "$STATE_FILE"
+  sedi "s/^status: .*/status: gutter_detected/" "$STATE_FILE"
   
   exit 0
 fi
@@ -125,7 +134,7 @@ if [[ "$MAX_ITERATIONS" -gt 0 ]] && [[ "$CURRENT_ITERATION" -ge "$MAX_ITERATIONS
   echo "Progress saved in .ralph/progress.md"
   echo "To continue, increase max_iterations in RALPH_TASK.md"
   
-  sed -i "s/^status: .*/status: max_iterations_reached/" "$STATE_FILE"
+  sedi "s/^status: .*/status: max_iterations_reached/" "$STATE_FILE"
   
   exit 0
 fi
@@ -222,7 +231,7 @@ if [[ "$CONTEXT_CRITICAL" == "true" ]] || [[ "$GUTTER_RISK_HIGH" == "true" ]]; t
   echo "═══════════════════════════════════════════════════════════════════"
   
   # Update state
-  sed -i "s/^status: .*/status: awaiting_fresh_context/" "$STATE_FILE"
+  sedi "s/^status: .*/status: awaiting_fresh_context/" "$STATE_FILE"
   
   # Log the pause
   cat >> "$PROGRESS_FILE" <<EOF
@@ -283,7 +292,9 @@ EOF
 # Read the task body for continuation
 TASK_BODY=$(awk '/^---$/{i++; next} i>=2' "$TASK_FILE")
 
-# Build the continuation prompt
+# Build the continuation prompt - use cross-platform grep
+ALLOCATED_TOKENS=$(grep 'Allocated:' "$CONTEXT_LOG" 2>/dev/null | grep -o '[0-9]*' | head -1 || echo "unknown")
+
 SYSTEM_MSG="🔄 Ralph Iteration $NEXT_ITERATION (same context)
 
 ## Continue Working
@@ -292,7 +303,7 @@ Read .ralph/progress.md to see what was accomplished.
 Check .ralph/guardrails.md for any new signs added.
 
 ## Context Status
-- Allocated: $(grep 'Allocated:' "$CONTEXT_LOG" 2>/dev/null | grep -oP '\d+' || echo "unknown") tokens
+- Allocated: $ALLOCATED_TOKENS tokens
 - Status: Healthy (continuing in same context)
 
 ## Reminders

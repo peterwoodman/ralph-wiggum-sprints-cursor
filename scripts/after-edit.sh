@@ -4,6 +4,15 @@
 
 set -euo pipefail
 
+# Cross-platform sed -i
+sedi() {
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i '' "$@"
+  else
+    sed -i "$@"
+  fi
+}
+
 # Read hook input from stdin
 HOOK_INPUT=$(cat)
 
@@ -73,10 +82,10 @@ EOF
 
   # Update pattern detection
   REPEATED_FAILURES=$(grep -c "Potential Thrashing" "$FAILURES_FILE" 2>/dev/null || echo "0")
-  sed -i "s/Repeated failures: [0-9]*/Repeated failures: $REPEATED_FAILURES/" "$FAILURES_FILE"
+  sedi "s/Repeated failures: [0-9]*/Repeated failures: $REPEATED_FAILURES/" "$FAILURES_FILE"
   
   if [[ "$REPEATED_FAILURES" -gt 2 ]]; then
-    sed -i "s/Gutter risk: .*/Gutter risk: HIGH/" "$FAILURES_FILE"
+    sedi "s/Gutter risk: .*/Gutter risk: HIGH/" "$FAILURES_FILE"
   fi
 fi
 

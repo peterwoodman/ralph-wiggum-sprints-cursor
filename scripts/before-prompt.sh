@@ -4,6 +4,15 @@
 
 set -euo pipefail
 
+# Cross-platform sed -i
+sedi() {
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i '' "$@"
+  else
+    sed -i "$@"
+  fi
+}
+
 # Read hook input from stdin
 HOOK_INPUT=$(cat)
 
@@ -126,11 +135,14 @@ CURRENT_ITERATION=$(grep '^iteration:' "$STATE_FILE" | sed 's/iteration: *//' ||
 NEXT_ITERATION=$((CURRENT_ITERATION + 1))
 
 # Update iteration count
-sed -i "s/^iteration: .*/iteration: $NEXT_ITERATION/" "$STATE_FILE"
-sed -i "s/^status: .*/status: active/" "$STATE_FILE"
+sedi "s/^iteration: .*/iteration: $NEXT_ITERATION/" "$STATE_FILE"
+sedi "s/^status: .*/status: active/" "$STATE_FILE"
 
-# Check context health
-ESTIMATED_TOKENS=$(grep 'Allocated:' "$CONTEXT_LOG" | grep -oP '\d+' || echo "0")
+# Check context health (cross-platform)
+ESTIMATED_TOKENS=$(grep 'Allocated:' "$CONTEXT_LOG" | grep -o '[0-9]*' | head -1 || echo "0")
+if [[ -z "$ESTIMATED_TOKENS" ]]; then
+  ESTIMATED_TOKENS=0
+fi
 THRESHOLD=80000
 WARN_THRESHOLD=$((THRESHOLD * 80 / 100))
 
