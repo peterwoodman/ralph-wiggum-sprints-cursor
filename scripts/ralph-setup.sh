@@ -97,6 +97,7 @@ get_max_iterations() {
 # Returns space-separated list of selected options
 select_options() {
   local options=(
+    "Commit to current branch"
     "Run single iteration first"
     "Work on new branch"
     "Open PR when complete"
@@ -255,6 +256,9 @@ main() {
   
   while IFS= read -r opt; do
     case "$opt" in
+      "Commit to current branch")
+        echo "✓ Will commit to current branch"
+        ;;
       "Run single iteration first")
         run_single_first=true
         echo "✓ Will run single iteration first"

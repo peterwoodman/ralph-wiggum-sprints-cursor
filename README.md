@@ -126,6 +126,7 @@ With gum, you get a beautiful interactive menu for selecting models and options:
 ? Max iterations: 20
 
 ? Options:
+  ◯ Commit to current branch
   ◯ Run single iteration first
   ◯ Work on new branch
   ◯ Open PR when complete
