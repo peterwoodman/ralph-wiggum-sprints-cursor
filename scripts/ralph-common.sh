@@ -217,8 +217,10 @@ check_task_complete() {
     return
   fi
   
+  # Only count actual checkbox list items, not [ ] in prose/examples
+  # Matches: "- [ ]", "* [ ]", "1. [ ]", etc.
   local unchecked
-  unchecked=$(grep -c '\[ \]' "$task_file" 2>/dev/null) || unchecked=0
+  unchecked=$(grep -cE '^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+\[ \]' "$task_file" 2>/dev/null) || unchecked=0
   
   if [[ "$unchecked" -eq 0 ]]; then
     echo "COMPLETE"
@@ -237,9 +239,11 @@ count_criteria() {
     return
   fi
   
+  # Only count actual checkbox list items, not [x] or [ ] in prose/examples
+  # Matches: "- [ ]", "* [x]", "1. [ ]", etc.
   local total done_count
-  total=$(grep -cE '\[ \]|\[x\]' "$task_file" 2>/dev/null) || total=0
-  done_count=$(grep -c '\[x\]' "$task_file" 2>/dev/null) || done_count=0
+  total=$(grep -cE '^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+\[(x| )\]' "$task_file" 2>/dev/null) || total=0
+  done_count=$(grep -cE '^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+\[x\]' "$task_file" 2>/dev/null) || done_count=0
   
   echo "$done_count:$total"
 }
@@ -265,6 +269,15 @@ Before doing anything:
 2. Read \`.ralph/guardrails.md\` - lessons from past failures (FOLLOW THESE)
 3. Read \`.ralph/progress.md\` - what's been accomplished
 4. Read \`.ralph/errors.log\` - recent failures to avoid
+
+## Working Directory (Critical)
+
+You are already in a git repository. Work HERE, not in a subdirectory:
+
+- Do NOT run \`git init\` - the repo already exists
+- Do NOT run scaffolding commands that create nested directories (\`npx create-*\`, \`npm init\`, etc.)
+- If you need to scaffold, use flags like \`--no-git\` or scaffold into the current directory (\`.\`)
+- All code should live at the repo root or in subdirectories you create manually
 
 ## Git Protocol (Critical)
 
@@ -639,10 +652,10 @@ show_task_summary() {
   echo "─────────────────────────────────────────────────────────────────"
   echo ""
   
-  # Count criteria
+  # Count criteria - only actual checkbox list items (- [ ], * [x], 1. [ ], etc.)
   local total_criteria done_criteria remaining
-  total_criteria=$(grep -cE '\[ \]|\[x\]' "$task_file" 2>/dev/null) || total_criteria=0
-  done_criteria=$(grep -c '\[x\]' "$task_file" 2>/dev/null) || done_criteria=0
+  total_criteria=$(grep -cE '^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+\[(x| )\]' "$task_file" 2>/dev/null) || total_criteria=0
+  done_criteria=$(grep -cE '^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+\[x\]' "$task_file" 2>/dev/null) || done_criteria=0
   remaining=$((total_criteria - done_criteria))
   
   echo "Progress: $done_criteria / $total_criteria criteria complete ($remaining remaining)"
