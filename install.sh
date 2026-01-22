@@ -54,6 +54,7 @@ WORKSPACE_ROOT="$(pwd)"
 
 echo "📁 Creating directories..."
 mkdir -p .cursor/ralph-scripts
+mkdir -p .cursor/rules
 mkdir -p .ralph
 
 # =============================================================================
@@ -79,6 +80,42 @@ done
 
 echo "✓ Scripts installed to .cursor/ralph-scripts/"
 
+# =============================================================================
+# INSTALL CURSOR RULES
+# =============================================================================
+
+echo "📜 Installing Cursor rules..."
+
+if [[ ! -f ".cursor/rules/ralph-tasks.mdc" ]]; then
+# create the rule file
+cat > .cursor/rules/ralph-tasks.mdc << 'EOF'
+---
+description: Rules for creating and managing Ralph sprint tasks
+globs:
+  - ralph-backlog.json
+  - ralph-todo.json
+  - ralph-complete.json
+alwaysApply: false
+---
+
+# Ralph Task Management
+
+When adding, editing, or managing tasks in Ralph task files:
+
+1. **Read `.ralph/task-schema.json`** to understand the required task format
+2. **Analyze the codebase** to understand the scope and implications of the task
+3. **Ask clarifying questions** before creating tasks if the requirements are ambiguous
+4. **Split tasks** with natural boundaries into multiple smaller tasks
+
+## Task File Locations
+
+- `ralph-backlog.json` - Future tasks (add new tasks here)
+- `ralph-todo.json` - Current sprint (Ralph processes these)
+- `ralph-complete.json` - Completed tasks (moved automatically)
+
+EOF
+  echo "✓ Created ralph-tasks.mdc in .cursor/rules/"
+fi
 
 # =============================================================================
 # INITIALIZE .ralph/ STATE
@@ -166,10 +203,7 @@ echo "📋 Initializing sprint task files..."
 # Create ralph-backlog.json if it doesn't exist
 if [[ ! -f "ralph-backlog.json" ]]; then
 cat > ralph-backlog.json << 'EOF'
-{
-	"_instructions": "Use the file .ralph/task-schema.json when defining tasks. Before creating a task, analyze the codebase to understand the scope and implications. Ask the user questions for clarification or decision making. If the task has natural boundaries within it, split it into multiple tasks",
-	"tasks":[]
-}
+[]
 EOF
   echo "✓ Created ralph-backlog.json"
 else
@@ -282,6 +316,9 @@ echo "     ├── ralph.sh              - Continuous loop (main entry)"
 echo "     ├── ralph-once.sh         - Single iteration (testing)"
 echo "     ├── ralph-common.sh       - Shared utilities"
 echo "     └── stream-parser.sh      - Output parser"
+echo ""
+echo "  📁 .cursor/rules/"
+echo "     └── ralph-tasks.mdc       - AI rules for task management"
 echo ""
 echo "  📁 .ralph/                   - State files (tracked in git)"
 echo "     ├── guardrails.md         - Lessons learned (Signs)"

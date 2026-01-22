@@ -1,4 +1,0 @@
-{
-	"_instructions": "Use the file task-schema.json when defining tasks. Before creating a task, analyze the codebase to understand the scope and implications. Ask the user questions for clarification or decision making. If the task has natural boundaries within it, split it into multiple tasks",
-	"tasks":[]
-}
