@@ -1,4 +1,4 @@
-# Ralph Wiggum: Autonomous Development Loop
+# Ralph Wiggum Sprints for Cursor: Autonomous Task Agents
 
 Ralph runs the Cursor agent in a continuous loop with sprint-style task management. Progress persists in files and git, not in the LLM's context window.
 
