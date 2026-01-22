@@ -8,14 +8,15 @@
 #   cursor-agent -p --force --output-format stream-json "..." | ./stream-parser.sh /path/to/workspace
 #
 # Outputs to stdout:
-#   - ROTATE when threshold hit (80k tokens)
-#   - WARN when approaching limit (70k tokens)
 #   - GUTTER when stuck pattern detected
 #   - COMPLETE when agent outputs <ralph>COMPLETE</ralph>
 #
 # Writes to .ralph/:
-#   - activity.log: all operations with context health
+#   - activity.log: all operations with token counts
 #   - errors.log: failures and gutter detection
+#
+# Note: Token counters are RESET when a new session starts (system/init event).
+# This ensures each session has fresh context tracking starting from 0.
 
 set -euo pipefail
 
@@ -25,10 +26,6 @@ RALPH_DIR="$WORKSPACE/.ralph"
 # Ensure .ralph directory exists
 mkdir -p "$RALPH_DIR"
 
-# Thresholds
-WARN_THRESHOLD=70000
-ROTATE_THRESHOLD=80000
-
 # Tracking state
 BYTES_READ=0
 BYTES_WRITTEN=0
@@ -36,7 +33,6 @@ ASSISTANT_CHARS=0
 SHELL_OUTPUT_CHARS=0
 PROMPT_CHARS=0
 TOOL_CALLS=0
-WARN_SENT=0
 
 # Estimate initial prompt size (Ralph prompt is ~2KB + file references)
 PROMPT_CHARS=3000
@@ -45,20 +41,6 @@ PROMPT_CHARS=3000
 FAILURES_FILE=$(mktemp)
 WRITES_FILE=$(mktemp)
 trap "rm -f $FAILURES_FILE $WRITES_FILE" EXIT
-
-# Get context health emoji
-get_health_emoji() {
-  local tokens=$1
-  local pct=$((tokens * 100 / ROTATE_THRESHOLD))
-  
-  if [[ $pct -lt 60 ]]; then
-    echo "🟢"
-  elif [[ $pct -lt 80 ]]; then
-    echo "🟡"
-  else
-    echo "🔴"
-  fi
-}
 
 calc_tokens() {
   local total_bytes=$((PROMPT_CHARS + BYTES_READ + BYTES_WRITTEN + ASSISTANT_CHARS + SHELL_OUTPUT_CHARS))
@@ -69,10 +51,8 @@ calc_tokens() {
 log_activity() {
   local message="$1"
   local timestamp=$(date '+%H:%M:%S')
-  local tokens=$(calc_tokens)
-  local emoji=$(get_health_emoji $tokens)
   
-  echo "[$timestamp] $emoji $message" >> "$RALPH_DIR/activity.log"
+  echo "[$timestamp] $message" >> "$RALPH_DIR/activity.log"
 }
 
 # Log to errors.log
@@ -86,40 +66,12 @@ log_error() {
 # Check and log token status
 log_token_status() {
   local tokens=$(calc_tokens)
-  local pct=$((tokens * 100 / ROTATE_THRESHOLD))
-  local emoji=$(get_health_emoji $tokens)
   local timestamp=$(date '+%H:%M:%S')
   
-  local status_msg="TOKENS: $tokens / $ROTATE_THRESHOLD ($pct%)"
-  
-  if [[ $pct -ge 90 ]]; then
-    status_msg="$status_msg - rotation imminent"
-  elif [[ $pct -ge 72 ]]; then
-    status_msg="$status_msg - approaching limit"
-  fi
-  
   local breakdown="[read:$((BYTES_READ/1024))KB write:$((BYTES_WRITTEN/1024))KB assist:$((ASSISTANT_CHARS/1024))KB shell:$((SHELL_OUTPUT_CHARS/1024))KB]"
-  echo "[$timestamp] $emoji $status_msg $breakdown" >> "$RALPH_DIR/activity.log"
+  echo "[$timestamp] TOKENS: ~$tokens $breakdown" >> "$RALPH_DIR/activity.log"
 }
 
-# Check for gutter conditions
-check_gutter() {
-  local tokens=$(calc_tokens)
-  
-  # Check rotation threshold
-  if [[ $tokens -ge $ROTATE_THRESHOLD ]]; then
-    log_activity "ROTATE: Token threshold reached ($tokens >= $ROTATE_THRESHOLD)"
-    echo "ROTATE" 2>/dev/null || true
-    return
-  fi
-  
-  # Check warning threshold (only emit once per session)
-  if [[ $tokens -ge $WARN_THRESHOLD ]] && [[ $WARN_SENT -eq 0 ]]; then
-    log_activity "WARN: Approaching token limit ($tokens >= $WARN_THRESHOLD)"
-    WARN_SENT=1
-    echo "WARN" 2>/dev/null || true
-  fi
-}
 
 # Track shell command failure
 track_shell_failure() {
@@ -179,6 +131,19 @@ process_line() {
     "system")
       if [[ "$subtype" == "init" ]]; then
         local model=$(echo "$line" | jq -r '.model // "unknown"' 2>/dev/null) || model="unknown"
+        
+        # Reset counters on session init for fresh tracking
+        BYTES_READ=0
+        BYTES_WRITTEN=0
+        ASSISTANT_CHARS=0
+        SHELL_OUTPUT_CHARS=0
+        PROMPT_CHARS=3000  # Base prompt estimate
+        TOOL_CALLS=0
+        
+        # Clear gutter tracking files
+        > "$FAILURES_FILE"
+        > "$WRITES_FILE"
+        
         log_activity "SESSION START: model=$model"
       fi
       ;;
@@ -201,6 +166,18 @@ process_line() {
           log_activity "🚨 Agent signaled GUTTER (stuck)"
           echo "GUTTER" 2>/dev/null || true
         fi
+        
+        # Check for stalled sigil (all tasks over pass threshold)
+        if [[ "$text" == *"<ralph>STALLED</ralph>"* ]]; then
+          log_activity "⏸️ Agent signaled STALLED (all tasks over pass limit)"
+          echo "STALLED" 2>/dev/null || true
+        fi
+        
+        # Check for empty sigil (no tasks in todo)
+        if [[ "$text" == *"<ralph>EMPTY</ralph>"* ]]; then
+          log_activity "📭 Agent signaled EMPTY (no tasks in todo)"
+          echo "EMPTY" 2>/dev/null || true
+        fi
       fi
       ;;
       
@@ -214,12 +191,22 @@ process_line() {
           local path=$(echo "$line" | jq -r '.tool_call.readToolCall.args.path // "unknown"' 2>/dev/null) || path="unknown"
           local lines=$(echo "$line" | jq -r '.tool_call.readToolCall.result.success.totalLines // 0' 2>/dev/null) || lines=0
           
+          # Try to get actual content size, fall back to estimate
           local content_size=$(echo "$line" | jq -r '.tool_call.readToolCall.result.success.contentSize // 0' 2>/dev/null) || content_size=0
+          
+          # If no contentSize, try to measure actual content length
+          if [[ $content_size -eq 0 ]]; then
+            local content=$(echo "$line" | jq -r '.tool_call.readToolCall.result.success.content // ""' 2>/dev/null) || content=""
+            if [[ -n "$content" ]]; then
+              content_size=${#content}
+            fi
+          fi
+          
           local bytes
           if [[ $content_size -gt 0 ]]; then
             bytes=$content_size
           else
-            bytes=$((lines * 100))  # ~100 chars/line for code
+            bytes=$((lines * 30))  # ~30 chars/line estimate (code averages ~25-30)
           fi
           BYTES_READ=$((BYTES_READ + bytes))
           
@@ -261,8 +248,6 @@ process_line() {
           fi
         fi
         
-        # Check thresholds after each tool call
-        check_gutter
       fi
       ;;
       

@@ -1,10 +1,10 @@
 #!/bin/bash
 # Ralph Wiggum: One-click installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/agrimsingh/ralph-wiggum-cursor/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/peterwoodman/ralph-wiggum-sprints-cursor/main/install.sh | bash
 
 set -euo pipefail
 
-REPO_RAW="https://raw.githubusercontent.com/agrimsingh/ralph-wiggum-cursor/main"
+REPO_RAW="https://raw.githubusercontent.com/peterwoodman/ralph-wiggum-sprints-cursor/main"
 
 echo "═══════════════════════════════════════════════════════════════════"
 echo "🐛 Ralph Wiggum Installer"
@@ -14,60 +14,35 @@ echo ""
 # Check if we're in a git repo
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
   echo "⚠️  Warning: Not in a git repository."
-  echo "   Ralph works best with git for state persistence."
+  echo "   Ralph requires git for state persistence."
   echo ""
   echo "   Run: git init"
   echo ""
 fi
 
+# Check for jq (required for JSON parsing)
+if ! command -v jq &> /dev/null; then
+  echo "❌ jq not found (required for JSON parsing)"
+  echo ""
+  echo "Install via:"
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "  brew install jq"
+  elif [[ -f /etc/debian_version ]]; then
+    echo "  apt install jq"
+  elif [[ -f /etc/fedora-release ]] || [[ -f /etc/redhat-release ]]; then
+    echo "  dnf install jq"
+  else
+    echo "  See: https://jqlang.github.io/jq/download/"
+  fi
+  echo ""
+  exit 1
+fi
+echo "✓ jq found"
+
 # Check for cursor-agent CLI
 if ! command -v cursor-agent &> /dev/null; then
   echo "⚠️  Warning: cursor-agent CLI not found."
   echo "   Install via: curl https://cursor.com/install -fsS | bash"
-  echo ""
-fi
-
-# Check for gum and offer to install
-if ! command -v gum &> /dev/null; then
-  echo "📦 gum not found (provides beautiful CLI menus)"
-  
-  # Auto-install if INSTALL_GUM=1 or prompt user
-  SHOULD_INSTALL=""
-  if [[ "${INSTALL_GUM:-}" == "1" ]]; then
-    SHOULD_INSTALL="y"
-  else
-    read -p "   Install gum? [y/N] " -n 1 -r < /dev/tty
-    echo
-    SHOULD_INSTALL="$REPLY"
-  fi
-  
-  if [[ "$SHOULD_INSTALL" =~ ^[Yy]$ ]]; then
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-      if command -v brew &> /dev/null; then
-        echo "   Installing via Homebrew..."
-        brew install gum
-      else
-        echo "   ⚠️  Homebrew not found. Install manually: brew install gum"
-      fi
-    elif [[ -f /etc/debian_version ]]; then
-      echo "   Installing via apt..."
-      sudo mkdir -p /etc/apt/keyrings
-      curl -fsSL https://repo.charm.sh/apt/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/charm.gpg
-      echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" | sudo tee /etc/apt/sources.list.d/charm.list
-      sudo apt update && sudo apt install -y gum
-    elif [[ -f /etc/fedora-release ]] || [[ -f /etc/redhat-release ]]; then
-      echo "   Installing via dnf..."
-      echo '[charm]
-name=Charm
-baseurl=https://repo.charm.sh/yum/
-enabled=1
-gpgcheck=1
-gpgkey=https://repo.charm.sh/yum/gpg.key' | sudo tee /etc/yum.repos.d/charm.repo
-      sudo dnf install -y gum
-    else
-      echo "   ⚠️  Unknown Linux distro. Install manually: https://github.com/charmbracelet/gum#installation"
-    fi
-  fi
   echo ""
 fi
 
@@ -89,11 +64,9 @@ echo "📥 Downloading Ralph scripts..."
 
 SCRIPTS=(
   "ralph-common.sh"
-  "ralph-setup.sh"
-  "ralph-loop.sh"
+  "ralph.sh"
   "ralph-once.sh"
   "stream-parser.sh"
-  "init-ralph.sh"
 )
 
 for script in "${SCRIPTS[@]}"; do
@@ -113,6 +86,8 @@ echo "✓ Scripts installed to .cursor/ralph-scripts/"
 
 echo "📁 Initializing .ralph/ state directory..."
 
+# Initialize guardrails.md if it doesn't exist
+if [[ ! -f ".ralph/guardrails.md" ]]; then
 cat > .ralph/guardrails.md << 'EOF'
 # Ralph Guardrails (Signs)
 
@@ -142,104 +117,135 @@ cat > .ralph/guardrails.md << 'EOF'
 (Signs added from observed failures will appear below)
 
 EOF
+fi
 
+# Initialize progress.md if it doesn't exist
+if [[ ! -f ".ralph/progress.md" ]]; then
 cat > .ralph/progress.md << 'EOF'
 # Progress Log
 
 > Updated by the agent after significant work.
 
-## Summary
-
-- Iterations completed: 0
-- Current status: Initialized
-
-## How This Works
-
-Progress is tracked in THIS FILE, not in LLM context.
-When context is rotated (fresh agent), the new agent reads this file.
-This is how Ralph maintains continuity across iterations.
+---
 
 ## Session History
 
 EOF
+fi
 
+# Initialize errors.log if it doesn't exist
+if [[ ! -f ".ralph/errors.log" ]]; then
 cat > .ralph/errors.log << 'EOF'
 # Error Log
 
 > Failures detected by stream-parser. Use to update guardrails.
 
 EOF
+fi
 
+# Initialize activity.log if it doesn't exist
+if [[ ! -f ".ralph/activity.log" ]]; then
 cat > .ralph/activity.log << 'EOF'
 # Activity Log
 
 > Real-time tool call logging from stream-parser.
 
 EOF
+fi
 
 echo "0" > .ralph/.iteration
 
 echo "✓ .ralph/ initialized"
 
 # =============================================================================
-# CREATE RALPH_TASK.md TEMPLATE
+# INITIALIZE SPRINT FILES (JSON task files)
 # =============================================================================
 
-if [[ ! -f "RALPH_TASK.md" ]]; then
-  echo "📝 Creating RALPH_TASK.md template..."
-  cat > RALPH_TASK.md <<'TASKEOF'
----
-task: Build a CLI todo app in TypeScript
-test_command: "npx ts-node todo.ts list"
----
+echo "📋 Initializing sprint task files..."
 
-# Task: CLI Todo App (TypeScript)
-
-Build a simple command-line todo application in TypeScript.
-
-## Requirements
-
-1. Single file: `todo.ts`
-2. Uses `todos.json` for persistence
-3. Three commands: add, list, done
-4. TypeScript with proper types
-
-## Success Criteria
-
-1. [ ] `npx ts-node todo.ts add "Buy milk"` adds a todo and confirms
-2. [ ] `npx ts-node todo.ts list` shows all todos with IDs and status
-3. [ ] `npx ts-node todo.ts done 1` marks todo 1 as complete
-4. [ ] Todos survive script restart (JSON persistence)
-5. [ ] Invalid commands show helpful usage message
-6. [ ] Code has proper TypeScript types (no `any`)
-
-## Example Output
-
-```
-$ npx ts-node todo.ts add "Buy milk"
-✓ Added: "Buy milk" (id: 1)
-
-$ npx ts-node todo.ts list
-1. [ ] Buy milk
-
-$ npx ts-node todo.ts done 1
-✓ Completed: "Buy milk"
-```
-
----
-
-## Ralph Instructions
-
-1. Work on the next incomplete criterion (marked [ ])
-2. Check off completed criteria (change [ ] to [x])
-3. Run tests after changes
-4. Commit your changes frequently
-5. When ALL criteria are [x], output: `<ralph>COMPLETE</ralph>`
-6. If stuck on the same issue 3+ times, output: `<ralph>GUTTER</ralph>`
-TASKEOF
-  echo "✓ Created RALPH_TASK.md with example task"
+# Create ralph-backlog.json if it doesn't exist
+if [[ ! -f "ralph-backlog.json" ]]; then
+cat > ralph-backlog.json << 'EOF'
+{
+	"_instructions": "Use the file .ralph/task-schema.json when defining tasks. Before creating a task, analyze the codebase to understand the scope and implications. Ask the user questions for clarification or decision making. If the task has natural boundaries within it, split it into multiple tasks",
+	"tasks":[]
+}
+EOF
+  echo "✓ Created ralph-backlog.json"
 else
-  echo "✓ RALPH_TASK.md already exists (not overwritten)"
+  echo "✓ ralph-backlog.json already exists (not overwritten)"
+fi
+
+# Create ralph-todo.json if it doesn't exist
+if [[ ! -f "ralph-todo.json" ]]; then
+  echo "[]" > ralph-todo.json
+  echo "✓ Created ralph-todo.json"
+else
+  echo "✓ ralph-todo.json already exists (not overwritten)"
+fi
+
+# Create ralph-complete.json if it doesn't exist
+if [[ ! -f "ralph-complete.json" ]]; then
+  echo "[]" > ralph-complete.json
+  echo "✓ Created ralph-complete.json"
+else
+  echo "✓ ralph-complete.json already exists (not overwritten)"
+fi
+
+# Download task-schema.json to .ralph/
+if curl -fsSL "$REPO_RAW/tasks/task-schema.json" -o ".ralph/task-schema.json" 2>/dev/null; then
+  echo "✓ Downloaded task-schema.json to .ralph/"
+else
+  # Fallback: create a basic schema if download fails
+cat > .ralph/task-schema.json << 'EOF'
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Ralph Task List",
+  "description": "Schema for ralph task tracking files (ralph-todo.json, ralph-complete.json, ralph-backlog.json)",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["category", "description", "status", "priority", "steps", "dependencies"],
+    "properties": {
+      "category": {
+        "type": "string",
+        "enum": ["backend", "frontend", "data"],
+        "description": "The area of the codebase this task belongs to"
+      },
+      "description": {
+        "type": "string",
+        "description": "Brief description of the task"
+      },
+      "status": {
+        "type": "string",
+        "enum": ["pending", "in_progress", "completed", "blocked"],
+        "description": "Current status of the task"
+      },
+      "priority": {
+        "type": "string",
+        "enum": ["high", "medium", "low"],
+        "description": "Priority level of the task"
+      },
+      "steps": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "List of implementation steps for this task"
+      },
+      "dependencies": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "List of task descriptions that must be completed before this task"
+      },
+      "passes": {
+        "type": ["integer", "null"],
+        "minimum": 0,
+        "description": "Number of implementation passes/iterations completed"
+      }
+    }
+  }
+}
+EOF
+  echo "✓ Created task-schema.json in .ralph/"
 fi
 
 # =============================================================================
@@ -272,26 +278,32 @@ echo ""
 echo "Files created:"
 echo ""
 echo "  📁 .cursor/ralph-scripts/"
-echo "     ├── ralph-setup.sh          - Main entry (interactive)"
-echo "     ├── ralph-loop.sh           - CLI mode (for scripting)"
-echo "     ├── ralph-once.sh           - Single iteration (testing)"
-echo "     └── ...                     - Other utilities"
+echo "     ├── ralph.sh              - Continuous loop (main entry)"
+echo "     ├── ralph-once.sh         - Single iteration (testing)"
+echo "     ├── ralph-common.sh       - Shared utilities"
+echo "     └── stream-parser.sh      - Output parser"
 echo ""
-echo "  📁 .ralph/                     - State files (tracked in git)"
-echo "     ├── guardrails.md           - Lessons learned"
-echo "     ├── progress.md             - Progress log"
-echo "     ├── activity.log            - Tool call log"
-echo "     └── errors.log              - Failure log"
+echo "  📁 .ralph/                   - State files (tracked in git)"
+echo "     ├── guardrails.md         - Lessons learned (Signs)"
+echo "     ├── progress.md           - Progress log"
+echo "     ├── activity.log          - Tool call log"
+echo "     ├── errors.log            - Failure log"
+echo "     └── task-schema.json      - Task JSON schema"
 echo ""
-echo "  📄 RALPH_TASK.md               - Your task definition (edit this!)"
+echo "  📄 Sprint Files              - Task tracking (tracked in git)"
+echo "     ├── ralph-backlog.json    - Future tasks"
+echo "     ├── ralph-todo.json       - Current sprint (Ralph processes)"
+echo "     └── ralph-complete.json   - Completed tasks"
 echo ""
 echo "Next steps:"
-echo "  1. Edit RALPH_TASK.md to define your actual task"
-echo "  2. Run: ./.cursor/ralph-scripts/ralph-setup.sh"
+echo "  1. Add tasks to ralph-backlog.json (or ask Cursor to help)"
+echo "  2. Move tasks to ralph-todo.json when ready to work"
+echo "  3. Run: ./.cursor/ralph-scripts/ralph.sh"
 echo ""
-echo "Alternative commands:"
-echo "  • ralph-once.sh    - Test with single iteration first"
-echo "  • ralph-loop.sh    - CLI mode with flags (for scripting)"
+echo "Quick commands:"
+echo "  • ralph-once.sh              - Test with single iteration first"
+echo "  • ralph.sh -n 50 -m sonnet   - Custom iterations and model"
+echo "  • ralph.sh --branch feat -y  - Create branch, skip confirmation"
 echo ""
 echo "Monitor progress:"
 echo "  tail -f .ralph/activity.log"

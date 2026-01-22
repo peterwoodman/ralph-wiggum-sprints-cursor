@@ -4,6 +4,10 @@
 # Runs exactly ONE iteration of the Ralph loop, then stops.
 # Useful for testing your task definition before going AFK.
 #
+# Sprint-style workflow:
+#   ralph-todo.json     - Tasks to work on
+#   ralph-complete.json - Completed tasks
+#
 # Usage:
 #   ./ralph-once.sh                    # Run single iteration
 #   ./ralph-once.sh /path/to/project   # Run in specific project
@@ -12,12 +16,12 @@
 # After running:
 #   - Review the changes made
 #   - Check git log for commits
-#   - If satisfied, run ralph-setup.sh or ralph-loop.sh for full loop
+#   - If satisfied, run ralph-setup.sh or ralph.sh for continuous loop
 #
 # Requirements:
-#   - RALPH_TASK.md in the project root
 #   - Git repository
 #   - cursor-agent CLI installed
+#   - jq installed
 
 set -euo pipefail
 
@@ -42,15 +46,20 @@ Usage:
 
 Options:
   -m, --model MODEL      Model to use (default: opus-4.5-thinking)
+  -p, --passes N         Max passes before task stalls (default: 3)
   -h, --help             Show this help
+
+Sprint Files:
+  ralph-todo.json        Tasks to work on (current sprint)
+  ralph-complete.json    Completed tasks
 
 Examples:
   ./ralph-once.sh                        # Run one iteration
   ./ralph-once.sh -m sonnet-4.5-thinking # Use Sonnet model
   
 After reviewing the results:
-  - If satisfied: run ./ralph-setup.sh for full loop
-  - If issues: fix them, update RALPH_TASK.md or guardrails, run again
+  - If satisfied: run ./ralph.sh for continuous loop
+  - If issues: fix them, update ralph-todo.json or guardrails, run again
 EOF
 }
 
@@ -61,6 +70,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -m|--model)
       MODEL="$2"
+      shift 2
+      ;;
+    -p|--passes)
+      MAX_PASSES="$2"
       shift 2
       ;;
     -h|--help)
@@ -94,8 +107,6 @@ main() {
     WORKSPACE="$(cd "$WORKSPACE" && pwd)"
   fi
   
-  local task_file="$WORKSPACE/RALPH_TASK.md"
-  
   # Show banner
   echo "═══════════════════════════════════════════════════════════════════"
   echo "🐛 Ralph Wiggum: Single Iteration (Human-in-the-Loop)"
@@ -117,29 +128,35 @@ main() {
   
   echo "Workspace: $WORKSPACE"
   echo "Model:     $MODEL"
+  echo "Passes:    $MAX_PASSES (stall threshold)"
   echo ""
   
   # Show task summary
-  echo "📋 Task Summary:"
-  echo "─────────────────────────────────────────────────────────────────"
-  head -30 "$task_file"
-  echo "─────────────────────────────────────────────────────────────────"
-  echo ""
+  local workable
+  workable=$(show_task_summary "$WORKSPACE")
   
-  # Count criteria
-  local total_criteria done_criteria remaining
-  # Only count actual checkbox list items (- [ ], * [x], 1. [ ], etc.)
-  total_criteria=$(grep -cE '^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+\[(x| )\]' "$task_file" 2>/dev/null) || total_criteria=0
-  done_criteria=$(grep -cE '^[[:space:]]*([-*]|[0-9]+\.)[[:space:]]+\[x\]' "$task_file" 2>/dev/null) || done_criteria=0
-  remaining=$((total_criteria - done_criteria))
+  # Get task counts
+  local task_status=$(check_task_status "$WORKSPACE")
   
-  echo "Progress: $done_criteria / $total_criteria criteria complete ($remaining remaining)"
-  echo ""
-  
-  if [[ "$remaining" -eq 0 ]] && [[ "$total_criteria" -gt 0 ]]; then
-    echo "🎉 Task already complete! All criteria are checked."
-    exit 0
-  fi
+  case "$task_status" in
+    WORKABLE:*)
+      # Good to go
+      ;;
+    STALLED:*)
+      echo "⏸️  All tasks are stalled (passes >= $MAX_PASSES)"
+      echo "   Reset passes to 0 on a task to retry it."
+      exit 0
+      ;;
+    EMPTY|NO_FILE)
+      echo "📭 No tasks in ralph-todo.json"
+      echo "   Add tasks to ralph-todo.json first."
+      exit 0
+      ;;
+    *)
+      echo "⚠️  Unknown task status: $task_status"
+      exit 1
+      ;;
+  esac
   
   # Confirm
   read -p "Run single iteration? [Y/n] " -n 1 -r
@@ -166,9 +183,12 @@ main() {
   local signal
   signal=$(run_iteration "$WORKSPACE" "1" "" "$SCRIPT_DIR")
   
+  # Move any completed tasks
+  move_completed_tasks "$WORKSPACE"
+  
   # Check result
   local task_status
-  task_status=$(check_task_complete "$WORKSPACE")
+  task_status=$(check_task_status "$WORKSPACE")
   
   echo ""
   echo "═══════════════════════════════════════════════════════════════════"
@@ -178,14 +198,24 @@ main() {
   
   case "$signal" in
     "COMPLETE")
-      if [[ "$task_status" == "COMPLETE" ]]; then
-        echo "🎉 Task completed in single iteration!"
-        echo ""
-        echo "All criteria are checked. You're done!"
-      else
-        echo "⚠️  Agent signaled complete but some criteria remain unchecked."
-        echo "   Review the results and run again if needed."
-      fi
+      echo "✅ Task marked complete and moved to ralph-complete.json"
+      case "$task_status" in
+        WORKABLE:*)
+          local remaining=${task_status#WORKABLE:}
+          echo "   $remaining more tasks ready to work on."
+          ;;
+        STALLED:*)
+          echo "   Remaining tasks are stalled (passes >= $MAX_PASSES)."
+          ;;
+        EMPTY)
+          echo "   No more tasks in ralph-todo.json!"
+          ;;
+      esac
+      ;;
+    "STALLED")
+      echo "⏸️  All tasks are stalled (passes >= $MAX_PASSES)"
+      echo ""
+      echo "Reset passes to 0 on a task to retry it."
       ;;
     "GUTTER")
       echo "🚨 Gutter detected - agent got stuck."
@@ -195,19 +225,19 @@ main() {
       echo "  2. Simplifying the task"
       echo "  3. Fixing the blocking issue manually"
       ;;
-    "ROTATE")
-      echo "🔄 Context rotation was triggered."
-      echo ""
-      echo "The agent used a lot of context. This is normal for complex tasks."
-      echo "Review the progress and run again or proceed to full loop."
-      ;;
     *)
-      if [[ "$task_status" == "COMPLETE" ]]; then
-        echo "🎉 Task completed in single iteration!"
-      else
-        local remaining_count=${task_status#INCOMPLETE:}
-        echo "Agent finished with $remaining_count criteria remaining."
-      fi
+      case "$task_status" in
+        WORKABLE:*)
+          local remaining=${task_status#WORKABLE:}
+          echo "Agent finished. $remaining tasks remaining."
+          ;;
+        STALLED:*)
+          echo "Agent finished. Remaining tasks are stalled."
+          ;;
+        EMPTY)
+          echo "Agent finished. No more tasks in todo!"
+          ;;
+      esac
       ;;
   esac
   
@@ -218,8 +248,8 @@ main() {
   echo "  • cat .ralph/progress.md   # See progress log"
   echo ""
   echo "Next steps:"
-  echo "  • If satisfied: ./ralph-setup.sh  # Run full loop"
-  echo "  • If issues: fix, update task/guardrails, ./ralph-once.sh again"
+  echo "  • If satisfied: ./ralph.sh  # Run continuous loop"
+  echo "  • If issues: fix, update ralph-todo.json or guardrails, ./ralph-once.sh again"
   echo ""
 }
 
