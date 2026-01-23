@@ -690,7 +690,7 @@ reset_waiting_state() {
 # =============================================================================
 
 # Run a single agent iteration
-# Returns: signal (GUTTER, COMPLETE, or empty)
+# Returns: signal (COMPLETE, GUTTER, STALLED, EMPTY, or empty)
 run_iteration() {
   local workspace="$1"
   local iteration="$2"
@@ -765,6 +765,16 @@ run_iteration() {
         signal="COMPLETE"
         # Let agent finish gracefully
         ;;
+      "STALLED")
+        printf "\r\033[K" >&2  # Clear spinner line
+        echo "⏸️ All tasks stalled (over pass limit)..." >&2
+        signal="STALLED"
+        ;;
+      "EMPTY")
+        printf "\r\033[K" >&2  # Clear spinner line
+        echo "📭 No tasks in todo..." >&2
+        signal="EMPTY"
+        ;;
     esac
   done < "$fifo"
 
@@ -809,12 +819,11 @@ move_completed_tasks() {
   # Add completion timestamp to each
   completed_tasks=$(echo "$completed_tasks" | jq '[.[] | . + {completed_at: (now | todate)}]')
 
-  # Remove from todo
+  # Build new todo (without completed tasks) but don't write yet
   local new_todo
   new_todo=$(jq '[.[] | select(.status != "completed")]' "$todo_file")
-  echo "$new_todo" > "$todo_file"
 
-  # Append to complete
+  # Append to complete file FIRST (if this fails, todo remains intact)
   if [[ -f "$complete_file" ]]; then
     local new_complete
     new_complete=$(jq --argjson tasks "$completed_tasks" '. + $tasks' "$complete_file")
@@ -822,6 +831,9 @@ move_completed_tasks() {
   else
     echo "$completed_tasks" > "$complete_file"
   fi
+
+  # Only now remove from todo (complete file write succeeded)
+  echo "$new_todo" > "$todo_file"
 
   log_activity "$workspace" "Moved $count completed task(s) to ralph-complete.json"
   echo "📦 Moved $count completed task(s) to ralph-complete.json"
@@ -1041,6 +1053,24 @@ check_prerequisites() {
     fi
   fi
 
+  # Validate ralph-complete.json structure (if it exists)
+  local complete_file=$(get_complete_file "$workspace")
+  if [[ -f "$complete_file" ]]; then
+    if ! jq empty "$complete_file" 2>/dev/null; then
+      echo "❌ ralph-complete.json is not valid JSON"
+      echo ""
+      echo "Check syntax at: https://jsonlint.com/"
+      return 1
+    fi
+
+    # Check it's an array
+    local is_array=$(jq 'type == "array"' "$complete_file" 2>/dev/null)
+    if [[ "$is_array" != "true" ]]; then
+      echo "❌ ralph-complete.json must be a JSON array of tasks"
+      return 1
+    fi
+  fi
+
   # Show status
   local counts=$(count_todo_tasks "$workspace")
   local workable=${counts%%:*}
@@ -1062,16 +1092,17 @@ check_prerequisites() {
 # =============================================================================
 
 # Show sprint task summary
+# Display output goes to stderr, workable count goes to stdout for capture
 show_sprint_summary() {
   local workspace="$1"
   local todo_file=$(get_todo_file "$workspace")
   local complete_file=$(get_complete_file "$workspace")
 
-  echo "📋 Sprint Todo List:"
-  echo "─────────────────────────────────────────────────────────────────"
+  echo "📋 Sprint Todo List:" >&2
+  echo "─────────────────────────────────────────────────────────────────" >&2
 
   if [[ -f "$todo_file" ]]; then
-    # Show task summary using jq
+    # Show task summary using jq (suppress jq errors, output to stderr for display)
     jq -r --argjson max "$MAX_PASSES" '
       to_entries | .[] |
       "\(.key + 1). [\(
@@ -1085,13 +1116,13 @@ show_sprint_summary() {
       )\(
         if (.value.passes // 0) >= $max then " STALLED" else "" end
       )"
-    ' "$todo_file" 2>/dev/null || echo "(error reading ralph-todo.json)"
+    ' "$todo_file" 2>/dev/null >&2 || echo "(error reading ralph-todo.json)" >&2
   else
-    echo "(no tasks in todo)"
+    echo "(no tasks in todo)" >&2
   fi
 
-  echo "─────────────────────────────────────────────────────────────────"
-  echo ""
+  echo "─────────────────────────────────────────────────────────────────" >&2
+  echo "" >&2
 
   # Count tasks
   local counts=$(count_todo_tasks "$workspace")
@@ -1101,13 +1132,13 @@ show_sprint_summary() {
   local total=${rest#*:}
   local completed=$(count_complete_tasks "$workspace")
 
-  echo "Todo:        $total tasks ($workable workable, $stalled stalled)"
-  echo "Completed:   $completed tasks (in ralph-complete.json)"
-  echo "Pass limit:  $MAX_PASSES (tasks stall after this many attempts)"
-  echo "Model:       $MODEL"
-  echo ""
+  echo "Todo:        $total tasks ($workable workable, $stalled stalled)" >&2
+  echo "Completed:   $completed tasks (in ralph-complete.json)" >&2
+  echo "Pass limit:  $MAX_PASSES (tasks stall after this many attempts)" >&2
+  echo "Model:       $MODEL" >&2
+  echo "" >&2
 
-  # Return workable count for caller to check
+  # Return workable count on stdout for caller to capture
   echo "$workable"
 }
 
